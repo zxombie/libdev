@@ -300,12 +300,10 @@ devd_read(void)
 
 		switch(devd_buf[0]) {
 		case '+':
-			//devd_add(&devd_buf[1]);
 			devd_process(devd_buf);
 			break;
 
 		case '-':
-			//devd_del(&devd_buf[1]);
 			devd_process(devd_buf);
 			break;
 
@@ -316,7 +314,6 @@ devd_read(void)
 			break;
 		}
 
-		/* TODO: Move memory when this is false */
 		if (ptr - devd_buf < rlen) {
 			size_t move_len;
 
