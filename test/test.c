@@ -57,7 +57,7 @@ devd_test(const struct devd_item *dev)
 static void
 devd_test_umass(const struct devd_item *dev)
 {
-	printf("UMASS %s\n", dev->name, dev->parent);
+	printf("UMASS %s\n", dev->name);
 }
 
 int
