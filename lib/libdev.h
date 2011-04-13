@@ -36,7 +36,7 @@ int	devd_read(void);
 #define	DEV_ADD		0x02
 #define	DEV_REMOVE	0x04
 #define	DEV_UNKNOWN	0x08
-#define	DEV_ALL		0x0F
+#define	DEV_DEVICE_ALL	0x0E	/* All device types */
 
 struct devd_details {
 	const char *key;
@@ -45,17 +45,29 @@ struct devd_details {
 
 struct devd_item {
 	int type;
-	const char *name;
+
+	union {
+		struct {
+			const char *system;
+			const char *subsystem;
+			const char *type;
+		} notify;
+
+		struct {
+			const char *name;
+			const char *parent;
+		} device;
+	};
 
 	struct devd_details *details;
 	size_t details_len;
-
-	const char *parent;
 };
 
 typedef	void devd_callback(const struct devd_item *);
 
-int	devd_add_callback(const char *pattern, int types,
+int	devd_add_notify_callback(const char *systm, const char *subsystem,
+	    const char *type, devd_callback *callback);
+int	devd_add_device_callback(const char *pattern, int types,
 	    devd_callback *callback);
 
 #endif /* _LIBDEV_LIBDEV_H_ */

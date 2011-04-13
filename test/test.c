@@ -34,9 +34,30 @@
 #include "libdev.h"
 
 static void
-devd_test(const struct devd_item *dev)
+devd_notify_test(const struct devd_item *dev)
+{
+	unsigned int i;
+
+	printf("Notify: %s %s %s\n", dev->notify.system, dev->notify.subsystem,
+	    dev->notify.type);
+
+	for (i = 0; i < dev->details_len; i++) {
+		printf("\t%s=%s\n", dev->details[i].key, dev->details[i].value);
+	}
+}
+
+static void
+devd_test_devfs(const struct devd_item *dev)
+{
+	printf("Devfs notify: %s %s %s\n", dev->notify.system,
+	    dev->notify.subsystem, dev->notify.type);
+}
+
+static void
+devd_device_test(const struct devd_item *dev)
 {
 	const char *action;
+	unsigned int i;
 
 	switch(dev->type) {
 	case DEV_ADD:
@@ -47,17 +68,24 @@ devd_test(const struct devd_item *dev)
 		action = "Remove";
 		break;
 
+	case DEV_UNKNOWN:
+		action = "Unknown device";
+		break;
+
 	default:
 		/* Should never happen */
 		return;
 	}
-	printf("%s %s on %s\n", action, dev->name, dev->parent);
+	printf("%s %s on %s\n", action, dev->device.name, dev->device.parent);
+	for (i = 0; i < dev->details_len; i++) {
+		printf("\t%s=%s\n", dev->details[i].key, dev->details[i].value);
+	}
 }
 
 static void
 devd_test_umass(const struct devd_item *dev)
 {
-	printf("UMASS %s\n", dev->name);
+	printf("UMASS %s\n", dev->device.name);
 }
 
 int
@@ -71,8 +99,12 @@ main(int argc __unused, char *argv[] __unused)
 		return 1;
 	}
 
-	devd_add_callback("*", DEV_ADD | DEV_REMOVE, devd_test);
-	devd_add_callback("umass*", DEV_ADD | DEV_REMOVE, devd_test_umass);
+	devd_add_notify_callback("*", "*", "*", devd_notify_test);
+	devd_add_notify_callback("DEVFS", "*", "*", devd_test_devfs);
+
+	devd_add_device_callback("*", DEV_ADD | DEV_REMOVE, devd_device_test);
+	devd_add_device_callback("umass*", DEV_ADD | DEV_REMOVE,
+	    devd_test_umass);
 
 	for(;;) {
 		FD_ZERO(&fdset);

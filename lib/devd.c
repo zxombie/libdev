@@ -50,7 +50,15 @@
 struct devd_callback {
 	SLIST_ENTRY(devd_callback) entries;
 	int		 types;
-	char		*pattern;
+
+	/* Use for notifications */
+	char		*system;
+	char		*subsystem;
+	char		*type;
+
+	/* Used for devices */
+	char		*dev_name;
+
 	devd_callback	*callback;
 };
 
@@ -95,26 +103,77 @@ devd_close(void)
 	devd_pipe = -1;
 }
 
-int
-devd_add_callback(const char *pattern, int types, devd_callback *callback)
+static struct devd_callback *
+devd_callback_create(unsigned int types, devd_callback *callback)
 {
 	struct devd_callback *devd_cb;
 
-	/* Check invalid types */
-	if ((types & ~(DEV_ALL)) != 0)
-		return 1;
-
 	/* Create the struct to hold the callback details */
-	devd_cb = malloc(sizeof(*devd_cb));
+	devd_cb = calloc(sizeof(*devd_cb), 1);
 	if (devd_cb == NULL)
-		return 1;
+		return NULL;
 
 	/* And populate it */
 	devd_cb->callback = callback;
 	devd_cb->types = types;
 
-	devd_cb->pattern = strdup(pattern);
-	if (devd_cb->pattern == NULL) {
+	return devd_cb;
+}
+
+int
+devd_add_notify_callback(const char *systm, const char *subsystem,
+    const char *type, devd_callback *callback)
+{
+	struct devd_callback *devd_cb;
+
+	/* Create the struct to hold the callback details */
+	devd_cb = devd_callback_create(DEV_NOTIFY, callback);
+	if (devd_cb == NULL)
+		return 1;
+
+	devd_cb->system = strdup(systm);
+	if (devd_cb->system == NULL)
+		goto err;
+
+	devd_cb->subsystem = strdup(subsystem);
+	if (devd_cb->subsystem == NULL)
+		goto err;
+
+	devd_cb->type = strdup(type);
+	if (devd_cb->type == NULL)
+		goto err;
+
+	/* Add the item to the queue */
+	SLIST_INSERT_HEAD(&cb_head, devd_cb, entries);
+
+	return 0;
+
+err:
+	free(devd_cb->system);
+	free(devd_cb->subsystem);
+	free(devd_cb->type);
+	free(devd_cb);
+
+	return 1;
+}
+
+int
+devd_add_device_callback(const char *dev_name, int types,
+    devd_callback *callback)
+{
+	struct devd_callback *devd_cb;
+
+	/* Check invalid types */
+	if ((types & ~(DEV_DEVICE_ALL)) != 0)
+		return 1;
+
+	/* Create the struct to hold the callback details */
+	devd_cb = devd_callback_create(types, callback);
+	if (devd_cb == NULL)
+		return 1;
+
+	devd_cb->dev_name = strdup(dev_name);
+	if (devd_cb->dev_name == NULL) {
 		free(devd_cb);
 		return 1;
 	}
@@ -163,14 +222,148 @@ devd_match(const char *pattern, const char *str)
 	return 0;
 }
 
+static int
+devd_set_details(char *buf, struct devd_details **out_details, size_t *out_len)
+{
+	struct devd_details *details;
+	size_t details_len, len;
+	char *ptr, *sep;
+
+	details = NULL;
+	len = 0;
+	details_len = 0;
+
+	while(buf != NULL) {
+		/* Find the space separating the details */
+		ptr = strchr(buf, ' ');
+
+		/* Null terminate the details string */
+		if (ptr != NULL) {
+			ptr[0] = '\0';
+			ptr++;
+		}
+
+		/* Are the details empty */
+		if (buf[0] == '\0')
+			break;
+
+		sep = strchr(buf, '=');
+		if (sep != NULL) {
+			sep[0] = '\0';
+			sep++;
+
+			if (len == details_len) {
+				struct devd_details *tmp;
+
+				details_len += 2;
+				tmp = realloc(details,
+				    details_len * sizeof(details[0]));
+				if (tmp == NULL)
+					return 1;
+				details = tmp;
+			}
+			details[len].key = buf;
+			details[len].value = sep;
+			len += 1;
+		} else {
+			return 1;
+		}
+
+		buf = ptr;
+	}
+
+	*out_details = details;
+	*out_len = len;
+
+	return 0;
+}
+
 static void
-devd_process(char *buf)
+devd_notify_process(char *buf)
 {
 	struct devd_callback *cb;
 	struct devd_item dev;
-	size_t details_len;
+	char *sys_ptr, *subsys_ptr, *type_ptr;
+	char *ptr;
+
+	if (buf[0] != '!')
+		return;
+
+	/* Find the required parts of the string */
+	sys_ptr = strstr(buf, "system=");
+	if (sys_ptr == NULL)
+		return;
+
+	subsys_ptr = strstr(buf, "subsystem=");
+	if (subsys_ptr == NULL)
+		return;
+
+	type_ptr = strstr(buf, "type=");
+	if (type_ptr == NULL)
+		return;
+
+	/* Make each part null terminated */
+	ptr = strchr(sys_ptr, ' ');
+	if (ptr != NULL)
+		ptr[0] = '\0';
+	sys_ptr += strlen("system=");
+
+	ptr = strchr(subsys_ptr, ' ');
+	if (ptr != NULL)
+		ptr[0] = '\0';
+	subsys_ptr += strlen("subsystem=");
+
+	ptr = strchr(type_ptr, ' ');
+	if (ptr != NULL)
+		ptr[0] = '\0';
+	type_ptr += strlen("type=");
+
+	dev.type = DEV_NOTIFY;
+	dev.notify.system = sys_ptr;
+	dev.notify.subsystem = subsys_ptr;
+	dev.notify.type = type_ptr;
+
+	if (ptr != NULL) {
+		int ret;
+
+		buf = ptr + 1;
+		ret = devd_set_details(buf, &dev.details, &dev.details_len);
+		if (ret != 0)
+			goto done;
+	} else {
+		dev.details = NULL;
+		dev.details_len = 0;
+	}
+
+	SLIST_FOREACH(cb, &cb_head, entries) {
+		/* Skip callbacks that dont expect this type */
+		if ((cb->types & DEV_NOTIFY) != DEV_NOTIFY)
+			continue;
+
+		if (devd_match(cb->system, dev.notify.system) != 0)
+			continue;
+
+		if (devd_match(cb->subsystem, dev.notify.subsystem) != 0)
+			continue;
+
+		if (devd_match(cb->type, dev.notify.type) != 0)
+			continue;
+
+		cb->callback(&dev);
+	}
+
+done:
+	free(dev.details);
+}
+
+static void
+devd_device_process(char *buf)
+{
+	struct devd_callback *cb;
+	struct devd_item dev;
 	char *at_ptr, *on_ptr;
-	char *ptr, *sep;
+	char *ptr;
+	int ret;
 
 	switch(buf[0]) {
 	case '+':
@@ -179,6 +372,10 @@ devd_process(char *buf)
 
 	case '-':
 		dev.type = DEV_REMOVE;
+		break;
+
+	case '?':
+		dev.type = DEV_UNKNOWN;
 		break;
 
 	default:
@@ -205,66 +402,29 @@ devd_process(char *buf)
 	if (ptr != NULL)
 		ptr[0] = '\0';
 
-	dev.name = buf;
+	dev.device.name = buf;
 
 	/* Everything after the ' on ' is the parent */
-	dev.parent = on_ptr;
+	dev.device.parent = on_ptr;
 
 	/* Remove empty space before the details */
 	buf = at_ptr;
 	while(buf[0] == ' ')
 		buf++;
 
-	/* Find the details on this device */
-	dev.details = NULL;
-	dev.details_len = 0;
-	details_len = 0;
-	while(buf != NULL) {
-		/* Find the space separating the details */
-		ptr = strchr(buf, ' ');
-
-		/* Null terminate the details string */
-		if (ptr != NULL) {
-			ptr[0] = '\0';
-			ptr++;
-		}
-
-		/* Are the details empty */
-		if (buf[0] == '\0')
-			break;
-
-		sep = strchr(buf, '=');
-		if (sep != NULL) {
-			sep[0] = '\0';
-			sep++;
-
-			if (dev.details_len == details_len) {
-				struct devd_details *tmp;
-
-				details_len += 2;
-				tmp = realloc(dev.details,
-				    details_len * sizeof(dev.details[0]));
-				if (tmp == NULL) {
-					goto done;
-				}
-				dev.details = tmp;
-			}
-			dev.details[dev.details_len].key = buf;
-			dev.details[dev.details_len].value = sep;
-			dev.details_len++;
-		} else {
-			goto done;
-		}
-
-		buf = ptr;
-	}
+	ret = devd_set_details(buf, &dev.details, &dev.details_len);
+	if (ret != 0)
+		goto done;
 
 	SLIST_FOREACH(cb, &cb_head, entries) {
 		/* Skip callbacks that dont expect this type */
-		if ((dev.type & cb->types) == 0)
+		if ((dev.type & cb->types & DEV_DEVICE_ALL) == 0)
 			continue;
 
-		if (devd_match(cb->pattern, dev.name) != 0)
+		if (cb->dev_name == NULL)
+			continue;
+
+		if (devd_match(cb->dev_name, dev.device.name) != 0)
 			continue;
 
 
@@ -300,17 +460,13 @@ devd_read(void)
 
 		switch(devd_buf[0]) {
 		case '+':
-			devd_process(devd_buf);
-			break;
-
 		case '-':
-			devd_process(devd_buf);
+		case '?':
+			devd_device_process(devd_buf);
 			break;
 
 		case '!':
-			break;
-
-		case '?':
+			devd_notify_process(devd_buf);
 			break;
 		}
 
