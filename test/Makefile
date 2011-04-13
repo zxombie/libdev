@@ -1,7 +1,8 @@
 PROG=		test
 
 CFLAGS+=	-I${.CURDIR}/../lib
-LDADD=		${.OBJDIR}/../lib/libdev.a
+DPADD+=		${.OBJDIR}/../lib/libdev.a
+LDADD+=		${.OBJDIR}/../lib/libdev.a
 
 WARNS?=		6
 MAN=
